@@ -51,7 +51,10 @@ class DFE_Server:
 
         elif self.serial_client in select.select([self.serial_client], [], [], 0.05)[0]:
             try:
-                self.control_client.send(self.serial_client.readline())
+                message = self.serial_client.read(3)
+                message = int(message.encode('hex'), 16)
+
+                self.control_client.send('0x%02x %u\n' % ((message>>16) & 0xFF, (message & 0xFFFF)))
 
             except serial.serialutil.SerialException:
                 self.serial_client.close()
