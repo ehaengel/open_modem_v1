@@ -3,6 +3,8 @@ import sys, os
 import socket
 import serial
 import select
+import time
+from math import *
 
 class DFE_Server:
     def __init__(self):
@@ -22,6 +24,9 @@ class DFE_Server:
 
         # Serial data
         self.serial_client = None
+        self.dac_value = 0x0000
+
+        self.last_update = time.time()
 
     def update(self):
         # If control client not connected, wait on connection
@@ -43,7 +48,7 @@ class DFE_Server:
             for filename in os.listdir('/dev/'):
                 if 'ttyUSB' in filename:
                     try:
-                        self.serial_client = serial.Serial('/dev/' + filename, 115200)
+                        self.serial_client = serial.Serial('/dev/' + filename, 2500000)
                         break
 
                     except:
@@ -51,14 +56,57 @@ class DFE_Server:
 
         elif self.serial_client in select.select([self.serial_client], [], [], 0.05)[0]:
             try:
-                message = self.serial_client.read(3)
-                message = int(message.encode('hex'), 16)
+                read_count = self.serial_client.in_waiting - (self.serial_client.in_waiting % 3)
+                print self.serial_client.in_waiting, read_count
+                long_message = self.serial_client.read(read_count)
 
-                self.control_client.send('0x%02x %u\n' % ((message>>16) & 0xFF, (message & 0xFFFF)))
+
+                send_message = bytearray()
+                for n in range(0, read_count/3):
+                    message = int(long_message[3*n:3*n+3].encode('hex'), 16)
+
+                    adc_value = message & 0xFFFF
+                    #adc_value = (adc_value >> 8) + ((adc_value & 0xFF) << 8)
+                    status = (message>>16) & 0xFF
+                    #if status & 0x02 == 0x00:
+
+                    if status == 0xab:
+                        send_message.append(adc_value >> 8)
+                        send_message.append(adc_value & 0xFF)
+                    #self.control_client.send('%x, %d\n' % (status, adc_value))
+
+                    x = bytearray()
+                    if self.dac_value > 127:
+                        x.append(0xFF)
+                    else:
+                        x.append(0x00)
+                    #x.append(0x00)
+                    send_value = 100.0*sin(self.dac_value*pi/10.0) + 120
+                    if send_value > 255.0:
+                        send_value = 255.0
+                    elif send_value < 0.0:
+                        send_value = 0.0
+                    #x.append(int(send_value) & 0xFF)
+                    ##x.append(self.dac_value & 0xFF)
+                    #x.append((self.dac_value >> 8) & 0xFF)
+                    self.serial_client.write(x)
+                    self.dac_value = (self.dac_value + 1) % 0xFF
+                    #print 'dac_value = %u' % self.dac_value
+
+                if status != 0xab:
+                    self.serial_client.read(1)
+
+                self.control_client.send(send_message)
+
+                print 'Sample rate: %.2f Hz' % ((read_count/3) / (time.time() - self.last_update))
+                #self.control_client.send('\n')
+                #self.control_client.send('%.2f Hz' % ((read_count/3) / (time.time() - self.last_update)))
+                #self.control_client.send('\n')
 
             except serial.serialutil.SerialException:
                 self.serial_client.close()
                 self.serial_client = None
+        self.last_update = time.time()
 
 if __name__ == '__main__':
     dfe_server = DFE_Server()
